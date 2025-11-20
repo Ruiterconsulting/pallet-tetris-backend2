@@ -1,24 +1,20 @@
-FROM python:3.11
+FROM continuumio/miniconda3
 
-# Install system dependencies for OpenCascade
-RUN apt-get update && apt-get install -y \
-    git \
-    build-essential \
-    libgl1-mesa-dev \
-    libglu1-mesa-dev \
-    libxmu-dev \
-    libxi-dev \
-    freeglut3-dev \
-    libfreetype6-dev \
-    mesa-common-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Create conda environment
+RUN conda create -n occ python=3.11 -y
+RUN echo "source activate occ" > ~/.bashrc
+ENV PATH /opt/conda/envs/occ/bin:$PATH
+
+# Install OpenCascade via conda-forge
+RUN conda install -n occ -c conda-forge occt=7.7.0 -y
+
+# Install pythonocc-core
+RUN conda install -n occ -c conda-forge pythonocc-core=7.7.0 -y
+
+# Install FastAPI + Uvicorn + other deps
+RUN conda install -n occ -c conda-forge fastapi uvicorn python-multipart numpy -y
 
 WORKDIR /app
-
-# Install python dependencies (will install pythonocc-core)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
 COPY . .
 
 CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
