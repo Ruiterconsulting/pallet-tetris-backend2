@@ -1,18 +1,17 @@
-FROM python:3.10-slim
+FROM python:3.10
 
-# System dependencies required for OpenCascade
+# System dependencies for OpenCascade + OCP
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
-    libgl1 \
-    libxext6 \
+    libgl1-mesa-dev \
+    libglu1-mesa \
+    libx11-dev \
+    libxext-dev \
     libsm6 \
     libxrender1 \
-    libx11-6 \
     libfontconfig1 \
-    libglu1-mesa \
     && apt-get clean
 
-# Install Python dependencies
+# Python dependencies
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
