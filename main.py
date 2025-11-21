@@ -252,3 +252,4 @@ async def upload_part_with_mesh(
             "data": glb_b64,
         },
     }
+ 
