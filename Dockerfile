@@ -10,8 +10,11 @@ RUN apt-get update && apt-get install -y \
     python3-pyside2.qtx11extras \
     && apt-get clean
 
-# Python deps
-RUN pip install fastapi uvicorn python-multipart numpy
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
+    numpy
 
 WORKDIR /app
 COPY . .
