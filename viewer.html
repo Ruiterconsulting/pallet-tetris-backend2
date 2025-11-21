@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Pallet Tetris — 3D Viewer</title>
+  <style>
+    body { margin: 0; overflow: hidden; }
+    #info {
+      position: absolute;
+      top: 10px; left: 10px;
+      background: rgba(0,0,0,0.5);
+      color: white; padding: 10px;
+      font-family: sans-serif;
+      z-index: 10;
+    }
+  </style>
+</head>
+<body>
+
+<div id="info">Pallet Tetris 3D Viewer</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/controls/OrbitControls.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.161.0/examples/js/loaders/GLTFLoader.js"></script>
+
+<script>
+(async function(){
+
+    // ----- 1. YOUR BASE64 GLB GOES HERE -----
+    const glbBase64 = `
+PUT_YOUR_BASE64_HERE
+    `.trim();
+
+    // Convert base64 → binary
+    const binary = atob(glbBase64);
+    const array = Uint8Array.from(binary, c => c.charCodeAt(0));
+    const blob = new Blob([array], { type: "model/gltf-binary" });
+    const url = URL.createObjectURL(blob);
+
+    // ----- 2. Setup Three.js -----
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+
+    const camera = new THREE.PerspectiveCamera(50, window.innerWidth/window.innerHeight, 0.1, 5000);
+    camera.position.set(300, 300, 300);
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
+
+    const controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+    // Lights
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1));
+    const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+    dirLight.position.set(200, 300, 100);
+    scene.add(dirLight);
+
+    // Grid
+    const grid = new THREE.GridHelper(2000, 80);
+    grid.material.opacity = 0.3;
+    grid.material.transparent = true;
+    scene.add(grid);
+
+    // ----- 3. Load GLB -----
+    const loader = new THREE.GLTFLoader();
+    loader.load(url, gltf => {
+        const obj = gltf.scene;
+        scene.add(obj);
+
+        // Fit to view
+        const box = new THREE.Box3().setFromObject(obj);
+        const size = box.getSize(new THREE.Vector3()).length();
+        const center = box.getCenter(new THREE.Vector3());
+
+        controls.target.copy(center);
+        camera.position.copy(center.clone().add(new THREE.Vector3(size, size, size)));
+        controls.update();
+
+        // Bounding box
+        const boxHelper = new THREE.Box3Helper(box, 0xff8800);
+        scene.add(boxHelper);
+
+    });
+
+    // ----- 4. Render loop -----
+    function animate() {
+        requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+    }
+    animate();
+
+})();
+</script>
+</body>
+</html>
