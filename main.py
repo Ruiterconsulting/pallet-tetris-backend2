@@ -23,19 +23,11 @@ from OCC.Core.TopoDS import topods_Face
 app = FastAPI()
 
 
-# ============================
-# Helpers
-# ============================
-
 def round_f(x, n=3):
     return round(float(x), n)
 
 
 def analyze_step_file(step_path: str, material: str):
-    """
-    Lees STEP, bereken bbox, volume, gewicht.
-    Geeft (shape, result_dict) terug.
-    """
     reader = STEPControl_Reader()
     status = reader.ReadFile(step_path)
 
@@ -45,7 +37,6 @@ def analyze_step_file(step_path: str, material: str):
     reader.TransferRoots()
     shape = reader.OneShape()
 
-    # BOUNDING BOX
     bbox = Bnd_Box()
     brepbndlib_Add(shape, bbox)
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
@@ -54,72 +45,49 @@ def analyze_step_file(step_path: str, material: str):
     width = ymax - ymin
     height = zmax - zmin
 
-    # VOLUME
     props = GProp_GProps()
     brepgprop_VolumeProperties(shape, props)
-    volume_mm3 = props.Mass()  # mm³
+    volume_mm3 = props.Mass()
 
-    # DENSITY (kg/m³)
-    densities = {
-        "steel": 7850,
-        "aluminum": 2700,
-        "stainless": 8000,
-        "copper": 8960,
-    }
+    densities = {"steel": 7850, "aluminum": 2700, "stainless": 8000, "copper": 8960}
     density = densities.get(material.lower(), 7850)
 
     volume_m3 = volume_mm3 / 1_000_000_000.0
     weight_kg = volume_m3 * density
 
-    part_length = round_f(length, 3)
-    part_width = round_f(width, 3)
-    part_height = round_f(height, 3)
-
     result = {
         "rawBoundingBox": {
-            "xmin": xmin,
-            "xmax": xmax,
-            "ymin": ymin,
-            "ymax": ymax,
-            "zmin": zmin,
-            "zmax": zmax,
+            "xmin": xmin, "xmax": xmax,
+            "ymin": ymin, "ymax": ymax,
+            "zmin": zmin, "zmax": zmax
         },
         "partDimensions_mm": {
-            "length": part_length,
-            "width": part_width,
-            "height": part_height,
+            "length": round_f(length),
+            "width": round_f(width),
+            "height": round_f(height)
         },
         "partData": {
-            "length_mm": part_length,
-            "width_mm": part_width,
-            "height_mm": part_height,
+            "length_mm": round_f(length),
+            "width_mm": round_f(width),
+            "height_mm": round_f(height),
             "volume_mm3": round_f(volume_mm3, 3),
             "volume_m3": round_f(volume_m3, 9),
-            "weight_kg": round_f(weight_kg, 4),
-        },
+            "weight_kg": round_f(weight_kg, 4)
+        }
     }
 
     return shape, result
 
 
-def shape_to_glb_base64(shape) -> str:
-    """
-    Converteer een OpenCascade shape naar een GLB (binary glTF) in base64.
-    - Mesht met BRepMesh_IncrementalMesh
-    - Leest triangulatie per face
-    - Bouwt een Trimesh
-    - Exporteert naar GLB bytes
-    - Encodeert als base64 string
-    """
-
-    # Meshen (0.5 is een start; kun je later tunen)
-    mesh = BRepMesh_IncrementalMesh(shape, 0.5, True, 0.5, True)
+def shape_to_glb_base64(shape):
+    mesh = BRepMesh_IncrementalMesh(shape, 0.5, True)
     mesh.Perform()
 
     vertices = []
     faces = []
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
+
     while exp.More():
         face = topods_Face(exp.Current())
         loc = TopLoc_Location()
@@ -127,20 +95,22 @@ def shape_to_glb_base64(shape) -> str:
 
         if triangulation is not None:
             trsf = loc.Transformation()
-            nodes = triangulation.Nodes()
-            triangles = triangulation.Triangles()
+
+            # --- Correcte API voor OCC 7.7.0 ---
+            nb_nodes = triangulation.NbNodes()
+            nb_tris = triangulation.NbTriangles()
 
             v_offset = len(vertices)
 
-            # Nodes (1-based index)
-            for i in range(1, triangulation.NbNodes() + 1):
-                pnt = nodes.Value(i)
+            # Nodes ophalen
+            for i in range(1, nb_nodes + 1):
+                pnt = triangulation.Node(i)
                 pnt_tr = pnt.Transformed(trsf)
                 vertices.append([pnt_tr.X(), pnt_tr.Y(), pnt_tr.Z()])
 
-            # Triangles (1-based indices)
-            for i in range(1, triangulation.NbTriangles() + 1):
-                tri = triangles.Value(i)
+            # Triangles ophalen
+            for t in range(1, nb_tris + 1):
+                tri = triangulation.Triangle(t)
                 i1, i2, i3 = tri.Get()
                 faces.append([
                     v_offset + (i1 - 1),
@@ -151,59 +121,15 @@ def shape_to_glb_base64(shape) -> str:
         exp.Next()
 
     if not vertices or not faces:
-        raise RuntimeError("No triangulation data available for shape")
+        raise RuntimeError("No triangulation data available")
 
-    v_np = np.array(vertices, dtype=float)
-    f_np = np.array(faces, dtype=int)
+    vertices_np = np.array(vertices, float)
+    faces_np = np.array(faces, int)
 
-    tri_mesh = trimesh.Trimesh(vertices=v_np, faces=f_np, process=False)
-    glb_bytes = trimesh.exchange.gltf.export_glb(tri_mesh)
+    m = trimesh.Trimesh(vertices=vertices_np, faces=faces_np, process=False)
+    glb_bytes = trimesh.exchange.gltf.export_glb(m)
 
-    glb_b64 = base64.b64encode(glb_bytes).decode("ascii")
-    return glb_b64
-
-
-# ============================
-# Routes
-# ============================
-
-@app.get("/")
-def health():
-    return {"status": "ok"}
-
-
-@app.post("/upload-part")
-async def upload_part(
-    file: UploadFile = File(...),
-    material: str = Form("steel"),
-):
-    """
-    Analyse-only endpoint: bbox, afmetingen, volume, gewicht.
-    """
-    # 1. Save temp
-    ext = os.path.splitext(file.filename)[1].lower()
-    temp_name = f"{uuid.uuid4()}{ext}"
-    temp_path = f"/tmp/{temp_name}"
-
-    with open(temp_path, "wb") as f:
-        f.write(await file.read())
-
-    # 2. Analyse
-    try:
-        shape, result = analyze_step_file(temp_path, material)
-    except Exception as e:
-        return JSONResponse(
-            {"error": f"STEP analysis failed: {str(e)}"},
-            status_code=400,
-        )
-
-    # 3. Response
-    return {
-        "fileName": file.filename,
-        "material": material,
-        "tempPath": temp_path,
-        **result,
-    }
+    return base64.b64encode(glb_bytes).decode("ascii")
 
 
 @app.post("/upload-part-with-mesh")
@@ -211,10 +137,6 @@ async def upload_part_with_mesh(
     file: UploadFile = File(...),
     material: str = Form("steel"),
 ):
-    """
-    Analyse + GLB-mesh (base64).
-    """
-    # 1. Save temp
     ext = os.path.splitext(file.filename)[1].lower()
     temp_name = f"{uuid.uuid4()}{ext}"
     temp_path = f"/tmp/{temp_name}"
@@ -222,34 +144,23 @@ async def upload_part_with_mesh(
     with open(temp_path, "wb") as f:
         f.write(await file.read())
 
-    # 2. Analyse
     try:
         shape, result = analyze_step_file(temp_path, material)
     except Exception as e:
-        return JSONResponse(
-            {"error": f"STEP analysis failed: {str(e)}"},
-            status_code=400,
-        )
+        return JSONResponse({"error": f"STEP analysis failed: {str(e)}"}, 400)
 
-    # 3. Mesh export
     try:
-        glb_b64 = shape_to_glb_base64(shape)
+        glb = shape_to_glb_base64(shape)
     except Exception as e:
-        return JSONResponse(
-            {"error": f"Mesh export failed: {str(e)}"},
-            status_code=500,
-        )
+        return JSONResponse({"error": f"Mesh export failed: {str(e)}"}, 500)
 
-    # 4. Response
     return {
         "fileName": file.filename,
         "material": material,
-        "tempPath": temp_path,
-        **result,
         "mesh": {
             "format": "glb",
             "encoding": "base64",
-            "data": glb_b64,
+            "data": glb
         },
+        **result
     }
- 
