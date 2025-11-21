@@ -4,7 +4,6 @@ import uuid
 import os
 import base64
 
-# Numeric / mesh libs
 import numpy as np
 import trimesh
 
@@ -19,6 +18,7 @@ from OCC.Core.TopExp import TopExp_Explorer
 from OCC.Core.TopAbs import TopAbs_FACE
 from OCC.Core.BRep import BRep_Tool
 from OCC.Core.TopLoc import TopLoc_Location
+from OCC.Core.TopoDS import topods_Face
 
 app = FastAPI()
 
@@ -112,7 +112,7 @@ def shape_to_glb_base64(shape) -> str:
     - Encodeert als base64 string
     """
 
-    # Mesh settings: kun je later tunen
+    # Meshen (0.5 is een start; kun je later tunen)
     mesh = BRepMesh_IncrementalMesh(shape, 0.5, True, 0.5, True)
     mesh.Perform()
 
@@ -120,36 +120,35 @@ def shape_to_glb_base64(shape) -> str:
     faces = []
 
     exp = TopExp_Explorer(shape, TopAbs_FACE)
-    for face in exp:
+    while exp.More():
+        face = topods_Face(exp.Current())
         loc = TopLoc_Location()
         triangulation = BRep_Tool.Triangulation(face, loc)
 
-        if triangulation is None:
-            continue
+        if triangulation is not None:
+            trsf = loc.Transformation()
+            nodes = triangulation.Nodes()
+            triangles = triangulation.Triangles()
 
-        trsf = loc.Transformation()
-        nodes = triangulation.Nodes()
-        triangles = triangulation.Triangles()
+            v_offset = len(vertices)
 
-        # Offset voor indices
-        v_offset = len(vertices)
+            # Nodes (1-based index)
+            for i in range(1, triangulation.NbNodes() + 1):
+                pnt = nodes.Value(i)
+                pnt_tr = pnt.Transformed(trsf)
+                vertices.append([pnt_tr.X(), pnt_tr.Y(), pnt_tr.Z()])
 
-        # Nodes
-        for i in range(1, triangulation.NbNodes() + 1):
-            pnt = nodes.Value(i)
-            pnt_tr = pnt.Transformed(trsf)
-            vertices.append([pnt_tr.X(), pnt_tr.Y(), pnt_tr.Z()])
+            # Triangles (1-based indices)
+            for i in range(1, triangulation.NbTriangles() + 1):
+                tri = triangles.Value(i)
+                i1, i2, i3 = tri.Get()
+                faces.append([
+                    v_offset + (i1 - 1),
+                    v_offset + (i2 - 1),
+                    v_offset + (i3 - 1),
+                ])
 
-        # Triangles (1-based indices)
-        for i in range(1, triangulation.NbTriangles() + 1):
-            tri = triangles.Value(i)
-            i1, i2, i3 = tri.Get()
-            # Convert naar 0-based + offset
-            faces.append([
-                v_offset + (i1 - 1),
-                v_offset + (i2 - 1),
-                v_offset + (i3 - 1),
-            ])
+        exp.Next()
 
     if not vertices or not faces:
         raise RuntimeError("No triangulation data available for shape")
@@ -214,9 +213,6 @@ async def upload_part_with_mesh(
 ):
     """
     Analyse + GLB-mesh (base64).
-    Ideaal voor Three.js / Lovable:
-    - je krijgt dimensies, volume, gewicht
-    - én een GLB als base64-string.
     """
     # 1. Save temp
     ext = os.path.splitext(file.filename)[1].lower()
