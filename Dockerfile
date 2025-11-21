@@ -1,6 +1,5 @@
 FROM python:3.10
 
-# System dependencies for OpenCascade + OCP
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-dev \
     libglu1-mesa \
@@ -11,7 +10,6 @@ RUN apt-get update && apt-get install -y \
     libfontconfig1 \
     && apt-get clean
 
-# Python dependencies
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
