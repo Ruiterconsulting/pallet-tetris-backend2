@@ -1,6 +1,6 @@
-FROM python:3.11-slim
+FROM python:3.11-bullseye
 
-# System libs for OCC
+# System libs required for OpenCascade
 RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libglib2.0-0 \
@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y \
     libglu1-mesa \
     && apt-get clean
 
-# Install Python requirements
+# Install python dependencies
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
