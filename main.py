@@ -1,141 +1,82 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 import uuid
 import os
-import base64
 
-import numpy as np
-import trimesh
-
-# OpenCascade imports
-from OCC.Core.STEPControl import STEPControl_Reader
-from OCC.Core.Bnd import Bnd_Box
-from OCC.Core.BRepBndLib import brepbndlib_Add
-from OCC.Core.GProp import GProp_GProps
-from OCC.Core.BRepGProp import brepgprop_VolumeProperties
-from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
-from OCC.Core.TopExp import TopExp_Explorer
-from OCC.Core.TopAbs import TopAbs_FACE
-from OCC.Core.BRep import BRep_Tool
-from OCC.Core.TopLoc import TopLoc_Location
-from OCC.Core.TopoDS import topods_Face
+# OCC imports
+from OCP.STEPControl import STEPControl_Reader
+from OCP.BRepBndLib import BRepBndLib
+from OCP.Bnd import Bnd_Box
+from OCP.StlAPI import StlAPI_Writer
+from OCP.TopoDS import TopoDS_Shape
+from OCP.TopExp import TopExp_Explorer
+from OCP.TopAbs import TopAbs_SOLID
 
 app = FastAPI()
 
+# -----------------------
+# ENABLE CORS FOR LOVABLE
+# -----------------------
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # <-- allow frontend
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-def round_f(x, n=3):
-    return round(float(x), n)
+@app.get("/")
+def health():
+    return {"status": "ok"}
 
+# -----------------------
+# HELPERS
+# -----------------------
 
-def analyze_step_file(step_path: str, material: str):
+def load_step_shape(path: str) -> TopoDS_Shape:
     reader = STEPControl_Reader()
-    status = reader.ReadFile(step_path)
+    status = reader.ReadFile(path)
 
     if status != 1:
-        raise RuntimeError("Failed to read STEP file")
+        raise RuntimeError("STEP could not be read")
 
     reader.TransferRoots()
     shape = reader.OneShape()
+    return shape
 
+def compute_bbox(shape: TopoDS_Shape):
     bbox = Bnd_Box()
-    brepbndlib_Add(shape, bbox)
+    bbox.SetGap(0)
+
+    BRepBndLib.Add(shape, bbox)
+
     xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-
-    length = xmax - xmin
-    width = ymax - ymin
-    height = zmax - zmin
-
-    props = GProp_GProps()
-    brepgprop_VolumeProperties(shape, props)
-    volume_mm3 = props.Mass()
-
-    densities = {"steel": 7850, "aluminum": 2700, "stainless": 8000, "copper": 8960}
-    density = densities.get(material.lower(), 7850)
-
-    volume_m3 = volume_mm3 / 1_000_000_000.0
-    weight_kg = volume_m3 * density
-
-    result = {
-        "rawBoundingBox": {
-            "xmin": xmin, "xmax": xmax,
-            "ymin": ymin, "ymax": ymax,
-            "zmin": zmin, "zmax": zmax
-        },
-        "partDimensions_mm": {
-            "length": round_f(length),
-            "width": round_f(width),
-            "height": round_f(height)
-        },
-        "partData": {
-            "length_mm": round_f(length),
-            "width_mm": round_f(width),
-            "height_mm": round_f(height),
-            "volume_mm3": round_f(volume_mm3, 3),
-            "volume_m3": round_f(volume_m3, 9),
-            "weight_kg": round_f(weight_kg, 4)
-        }
+    return {
+        "xmin": xmin,
+        "xmax": xmax,
+        "ymin": ymin,
+        "ymax": ymax,
+        "zmin": zmin,
+        "zmax": zmax
     }
 
-    return shape, result
+def compute_volume(shape: TopoDS_Shape):
+    from OCP.GProp import GProp_GProps
+    from OCP.BRepGProp import BRepGProp
 
+    props = GProp_GProps()
+    BRepGProp.VolumeProperties(shape, props)
+    return props.Mass()  # mm3
 
-def shape_to_glb_base64(shape):
-    mesh = BRepMesh_IncrementalMesh(shape, 0.5, True)
-    mesh.Perform()
+# -----------------------
+# UPLOAD WITHOUT MESH (ONLY PROPERTIES)
+# -----------------------
 
-    vertices = []
-    faces = []
-
-    exp = TopExp_Explorer(shape, TopAbs_FACE)
-
-    while exp.More():
-        face = topods_Face(exp.Current())
-        loc = TopLoc_Location()
-        triangulation = BRep_Tool.Triangulation(face, loc)
-
-        if triangulation is not None:
-            trsf = loc.Transformation()
-
-            # --- Correcte API voor OCC 7.7.0 ---
-            nb_nodes = triangulation.NbNodes()
-            nb_tris = triangulation.NbTriangles()
-
-            v_offset = len(vertices)
-
-            # Nodes ophalen
-            for i in range(1, nb_nodes + 1):
-                pnt = triangulation.Node(i)
-                pnt_tr = pnt.Transformed(trsf)
-                vertices.append([pnt_tr.X(), pnt_tr.Y(), pnt_tr.Z()])
-
-            # Triangles ophalen
-            for t in range(1, nb_tris + 1):
-                tri = triangulation.Triangle(t)
-                i1, i2, i3 = tri.Get()
-                faces.append([
-                    v_offset + (i1 - 1),
-                    v_offset + (i2 - 1),
-                    v_offset + (i3 - 1),
-                ])
-
-        exp.Next()
-
-    if not vertices or not faces:
-        raise RuntimeError("No triangulation data available")
-
-    vertices_np = np.array(vertices, float)
-    faces_np = np.array(faces, int)
-
-    m = trimesh.Trimesh(vertices=vertices_np, faces=faces_np, process=False)
-    glb_bytes = trimesh.exchange.gltf.export_glb(m)
-
-    return base64.b64encode(glb_bytes).decode("ascii")
-
-
-@app.post("/upload-part-with-mesh")
-async def upload_part_with_mesh(
+@app.post("/upload-part")
+async def upload_part(
     file: UploadFile = File(...),
-    material: str = Form("steel"),
+    material: str = Form("steel")
 ):
     ext = os.path.splitext(file.filename)[1].lower()
     temp_name = f"{uuid.uuid4()}{ext}"
@@ -145,22 +86,90 @@ async def upload_part_with_mesh(
         f.write(await file.read())
 
     try:
-        shape, result = analyze_step_file(temp_path, material)
+        shape = load_step_shape(temp_path)
     except Exception as e:
-        return JSONResponse({"error": f"STEP analysis failed: {str(e)}"}, 400)
+        return JSONResponse({"error": f"STEP load failed: {str(e)}"}, status_code=500)
 
-    try:
-        glb = shape_to_glb_base64(shape)
-    except Exception as e:
-        return JSONResponse({"error": f"Mesh export failed: {str(e)}"}, 500)
+    bbox = compute_bbox(shape)
+    length = bbox["xmax"] - bbox["xmin"]
+    width = bbox["ymax"] - bbox["ymin"]
+    height = bbox["zmax"] - bbox["zmin"]
+
+    volume_mm3 = compute_volume(shape)
+    volume_m3 = volume_mm3 / 1e9
+    weight_kg = volume_m3 * 7850  # steel density approx
 
     return {
         "fileName": file.filename,
         "material": material,
-        "mesh": {
-            "format": "glb",
-            "encoding": "base64",
-            "data": glb
+        "tempPath": temp_path,
+        "rawBoundingBox": bbox,
+        "partDimensions_mm": {
+            "length": round(length, 3),
+            "width": round(width, 3),
+            "height": round(height, 3),
         },
-        **result
+        "partData": {
+            "length_mm": round(length, 3),
+            "width_mm": round(width, 3),
+            "height_mm": round(height, 3),
+            "volume_mm3": round(volume_mm3, 3),
+            "volume_m3": round(volume_m3, 6),
+            "weight_kg": round(weight_kg, 4)
+        }
     }
+
+# -----------------------
+# UPLOAD + MESH EXPORT (GLB/STL)
+# -----------------------
+
+@app.post("/upload-part-with-mesh")
+async def upload_part_with_mesh(
+    file: UploadFile = File(...),
+    material: str = Form("steel")
+):
+    ext = os.path.splitext(file.filename)[1].lower()
+    temp_name = f"{uuid.uuid4()}{ext}"
+    temp_path = f"/tmp/{temp_name}"
+
+    with open(temp_path, "wb") as f:
+        f.write(await file.read())
+
+    try:
+        shape = load_step_shape(temp_path)
+    except Exception as e:
+        return JSONResponse({"error": f"STEP load failed: {str(e)}"}, status_code=500)
+
+    # Compute properties
+    bbox = compute_bbox(shape)
+    length = bbox["xmax"] - bbox["xmin"]
+    width = bbox["ymax"] - bbox["ymin"]
+    height = bbox["zmax"] - bbox["zmin"]
+    volume_mm3 = compute_volume(shape)
+    volume_m3 = volume_mm3 / 1e9
+    weight_kg = volume_m3 * 7850
+
+    # Export STL (can be converted to GLB client-side)
+    stl_path = f"/tmp/{uuid.uuid4()}.stl"
+    try:
+        writer = StlAPI_Writer()
+        writer.Write(shape, stl_path)
+    except Exception as e:
+        return JSONResponse({"error": f"Mesh export failed: {str(e)}"}, status_code=500)
+
+    return {
+        "fileName": file.filename,
+        "material": material,
+        "tempPath": temp_path,
+        "stlPath": stl_path,
+        "rawBoundingBox": bbox,
+        "dimensions_mm": {
+            "length": round(length, 3),
+            "width": round(width, 3),
+            "height": round(height, 3)
+        },
+        "volume_mm3": round(volume_mm3, 3),
+        "volume_m3": round(volume_m3, 6),
+        "weight_kg": round(weight_kg, 4)
+    }
+
