@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 import FreeCAD
+import Part
 import Mesh
 
 app = FastAPI()
@@ -34,7 +35,7 @@ async def upload_part(
 
     # Load STEP
     doc = FreeCAD.newDocument()
-    shape = doc.addObject("Part::Feature", "part")
+    shape = doc.addObject("Part::Feature", "Shape")
     shape.Shape = Part.Shape()
     shape.Shape.read(step_temp)
 
@@ -44,12 +45,16 @@ async def upload_part(
     width = bbox.YLength
     height = bbox.ZLength
 
-    # Save STL
+    # Mesh → STL
     stl_name = f"{uuid.uuid4()}.stl"
     stl_path = f"{PUBLIC_DIR}/{stl_name}"
 
     mesh_obj = doc.addObject("Mesh::Feature", "mesh")
-    mesh_obj.Mesh = Mesh.meshFromShape(shape.Shape, LinearDeflection=0.5, AngularDeflection=0.5)
+    mesh_obj.Mesh = Mesh.meshFromShape(
+        shape.Shape,
+        LinearDeflection=0.5,
+        AngularDeflection=0.5
+    )
     Mesh.export([mesh_obj], stl_path)
 
     stl_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/public/{stl_name}"
