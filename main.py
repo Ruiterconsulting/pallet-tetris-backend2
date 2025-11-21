@@ -1,23 +1,16 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import JSONResponse, FileResponse
-from fastapi.staticfiles import StaticFiles
-import uuid
 import os
-import numpy as np
+import uuid
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
-from pyocct_system import init_occt_system
-from ocp_tessellate import step_to_stl, BoundingBox
-
-# Initialize OCCT (required by pyocct)
-init_occt_system()
+import FreeCAD
+import Mesh
 
 app = FastAPI()
 
-# Public folder for STL files
 PUBLIC_DIR = "/app/public"
 os.makedirs(PUBLIC_DIR, exist_ok=True)
-
-# Mount static folder
 app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
 
 
@@ -31,37 +24,35 @@ async def upload_part(
     file: UploadFile = File(...),
     material: str = Form("steel")
 ):
-    # Save temp STEP file
-    ext = os.path.splitext(file.filename)[1].lower()
-    temp_name = f"{uuid.uuid4()}{ext}"
-    temp_path = f"/tmp/{temp_name}"
 
-    with open(temp_path, "wb") as f:
+    # Temp STEP
+    ext = os.path.splitext(file.filename)[1].lower()
+    step_temp = f"/tmp/{uuid.uuid4()}{ext}"
+
+    with open(step_temp, "wb") as f:
         f.write(await file.read())
 
-    # Convert STEP → STL
+    # Load STEP
+    doc = FreeCAD.newDocument()
+    shape = doc.addObject("Part::Feature", "part")
+    shape.Shape = Part.Shape()
+    shape.Shape.read(step_temp)
+
+    # Bounding box
+    bbox = shape.Shape.BoundBox
+    length = bbox.XLength
+    width = bbox.YLength
+    height = bbox.ZLength
+
+    # Save STL
     stl_name = f"{uuid.uuid4()}.stl"
     stl_path = f"{PUBLIC_DIR}/{stl_name}"
 
-    success = step_to_stl(temp_path, stl_path, linear_deflection=0.5, angular_deflection=0.5)
+    mesh_obj = doc.addObject("Mesh::Feature", "mesh")
+    mesh_obj.Mesh = Mesh.meshFromShape(shape.Shape, LinearDeflection=0.5, AngularDeflection=0.5)
+    Mesh.export([mesh_obj], stl_path)
 
-    if not success:
-        return JSONResponse({"error": "STEP conversion failed"}, status_code=400)
-
-    # Bounding box
-    bbox = BoundingBox.from_step(temp_path)
-    dims = bbox.dimensions()  # (length, width, height)
-
-    length, width, height = dims
-
-    # Volume approximation from bounding box (not exact)
-    volume_mm3 = length * width * height
-    density = 7850  # steel kg/m3
-    weight_kg = (volume_mm3 / 1e9) * density
-
-    # Public STL URL
-    external_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
-    stl_url = f"https://{external_host}/public/{stl_name}"
+    stl_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/public/{stl_name}"
 
     return {
         "fileName": file.filename,
@@ -71,8 +62,5 @@ async def upload_part(
             "width": width,
             "height": height
         },
-        "bbox_raw": bbox.bounds,
-        "volume_mm3": volume_mm3,
-        "weight_kg": weight_kg,
         "stlUrl": stl_url
     }
