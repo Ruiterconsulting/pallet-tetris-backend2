@@ -1,12 +1,12 @@
-FROM python:3.10-slim
+FROM python:3.11-slim
 
-# System dependencies
+# Only minimal deps — PyOCCT does NOT need GL
 RUN apt-get update && apt-get install -y \
-    libgl1-mesa-glx \
     libxcb1 \
+    libx11-6 \
     && apt-get clean
 
-# Install Python packages
+# Install Python deps including pyocct (OpenCascade wrapper)
 RUN pip install --no-cache-dir \
     fastapi \
     uvicorn \
