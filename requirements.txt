@@ -2,5 +2,3 @@ fastapi
 uvicorn
 python-multipart
 numpy
-OCP==7.7.0
-pythonocc-core==7.7.0
