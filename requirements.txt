@@ -1,4 +1,4 @@
 fastapi
-python-multipart
 uvicorn
+python-multipart
 numpy
