@@ -65,7 +65,7 @@ async def upload_part(
     # ============================
     props = GProp_GProps()
     brepgprop_VolumeProperties(shape, props)
-    volume = props.Mass()  # in cubic mm
+    volume_mm3 = props.Mass()  # in cubic mm
 
     # ============================
     # 5. Weight calculation
@@ -81,28 +81,48 @@ async def upload_part(
     density = densities.get(material.lower(), 7850)
 
     # Convert mm^3 → m^3:
-    volume_m3 = volume / 1_000_000_000
-
-    weight = volume_m3 * density  # kg
+    volume_m3 = volume_mm3 / 1_000_000_000.0
+    weight_kg = volume_m3 * density  # kg
 
     # ============================
-    # 6. Return JSON
+    # 6. Rounding for clean output
+    # ============================
+    def r(x, n=3):
+        return round(float(x), n)
+
+    part_length = r(length, 3)
+    part_width  = r(width, 3)
+    part_height = r(height, 3)
+
+    # ============================
+    # 7. Return JSON (Pallet Tetris ready)
     # ============================
     return {
-        "receivedFile": file.filename,
-        "temporaryPath": temp_path,
+        "fileName": file.filename,
         "material": material,
-        "bbox": {
+        "tempPath": temp_path,
+
+        # ruwe OCC-waarden (handig als debug)
+        "rawBoundingBox": {
             "xmin": xmin, "xmax": xmax,
             "ymin": ymin, "ymax": ymax,
             "zmin": zmin, "zmax": zmax
         },
-        "dimensions_mm": {
-            "length": length,
-            "width": width,
-            "height": height
+
+        # nette dimensies voor pallet-logica
+        "partDimensions_mm": {
+            "length": part_length,
+            "width": part_width,
+            "height": part_height
         },
-        "volume_mm3": volume,
-        "volume_m3": volume_m3,
-        "weight_kg": weight
+
+        # kerninfo per part voor Pallet Tetris
+        "partData": {
+            "length_mm": part_length,
+            "width_mm": part_width,
+            "height_mm": part_height,
+            "volume_mm3": r(volume_mm3, 3),
+            "volume_m3": r(volume_m3, 9),
+            "weight_kg": r(weight_kg, 4)
+        }
     }
