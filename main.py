@@ -5,13 +5,11 @@ import uuid
 import os
 import numpy as np
 
-from OCP.STEPControl import STEPControl_Reader
-from OCP.IFSelect import IFSelect_RetDone
-from OCP.StlAPI import StlAPI_Writer
-from OCP.TopExp import TopExp_Explorer
-from OCP.TopAbs import TopAbs_SOLID
-from OCP.Bnd import Bnd_Box
-from OCP.BRepBndLib import BRepBndLib
+from pyocct_system import init_occt_system
+from ocp_tessellate import step_to_stl, BoundingBox
+
+# Initialize OCCT (required by pyocct)
+init_occt_system()
 
 app = FastAPI()
 
@@ -19,7 +17,7 @@ app = FastAPI()
 PUBLIC_DIR = "/app/public"
 os.makedirs(PUBLIC_DIR, exist_ok=True)
 
-# Serve /public/ via HTTP
+# Mount static folder
 app.mount("/public", StaticFiles(directory=PUBLIC_DIR), name="public")
 
 
@@ -33,42 +31,37 @@ async def upload_part(
     file: UploadFile = File(...),
     material: str = Form("steel")
 ):
+    # Save temp STEP file
     ext = os.path.splitext(file.filename)[1].lower()
     temp_name = f"{uuid.uuid4()}{ext}"
     temp_path = f"/tmp/{temp_name}"
 
-    # Save uploaded file to /tmp
     with open(temp_path, "wb") as f:
         f.write(await file.read())
 
-    # STEP → Shape
-    reader = STEPControl_Reader()
-    status = reader.ReadFile(temp_path)
+    # Convert STEP → STL
+    stl_name = f"{uuid.uuid4()}.stl"
+    stl_path = f"{PUBLIC_DIR}/{stl_name}"
 
-    if status != IFSelect_RetDone:
-        return JSONResponse({"error": "STEP read failed"}, status_code=400)
+    success = step_to_stl(temp_path, stl_path, linear_deflection=0.5, angular_deflection=0.5)
 
-    reader.TransferRoots()
-    shape = reader.OneShape()
+    if not success:
+        return JSONResponse({"error": "STEP conversion failed"}, status_code=400)
 
     # Bounding box
-    bbox = Bnd_Box()
-    BRepBndLib.Add(shape, bbox)
+    bbox = BoundingBox.from_step(temp_path)
+    dims = bbox.dimensions()  # (length, width, height)
 
-    xmin, ymin, zmin, xmax, ymax, zmax = bbox.Get()
-    length = float(xmax - xmin)
-    width = float(ymax - ymin)
-    height = float(zmax - zmin)
+    length, width, height = dims
 
-    # Mesh → STL
-    stl_name = f"{uuid.uuid4()}.stl"
-    stl_path = os.path.join(PUBLIC_DIR, stl_name)
+    # Volume approximation from bounding box (not exact)
+    volume_mm3 = length * width * height
+    density = 7850  # steel kg/m3
+    weight_kg = (volume_mm3 / 1e9) * density
 
-    writer = StlAPI_Writer()
-    writer.Write(shape, stl_path)
-
-    # Build response
-    stl_url = f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/public/{stl_name}"
+    # Public STL URL
+    external_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+    stl_url = f"https://{external_host}/public/{stl_name}"
 
     return {
         "fileName": file.filename,
@@ -78,5 +71,8 @@ async def upload_part(
             "width": width,
             "height": height
         },
+        "bbox_raw": bbox.bounds,
+        "volume_mm3": volume_mm3,
+        "weight_kg": weight_kg,
         "stlUrl": stl_url
     }
