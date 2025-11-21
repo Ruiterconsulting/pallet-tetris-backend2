@@ -1,22 +1,24 @@
-FROM continuumio/miniconda3
+FROM python:3.11-slim
 
-# Create conda environment
-RUN conda create -n occ python=3.11 -y
-RUN echo "source activate occ" > ~/.bashrc
-ENV PATH /opt/conda/envs/occ/bin:$PATH
+# System libs for OCC
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libxext6 \
+    libsm6 \
+    libxrender1 \
+    libxcursor1 \
+    libxrandr2 \
+    libxinerama1 \
+    libfontconfig1 \
+    libfreetype6 \
+    libxkbcommon0 \
+    libglu1-mesa \
+    && apt-get clean
 
-# Install OpenCascade via conda-forge
-RUN conda install -n occ -c conda-forge occt=7.7.0 -y
-
-# Install pythonocc-core + FastAPI stack + trimesh
-RUN conda install -n occ -c conda-forge \
-    pythonocc-core=7.7.0 \
-    fastapi \
-    uvicorn \
-    python-multipart \
-    numpy \
-    trimesh \
-    -y
+# Install Python requirements
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
 COPY . .
