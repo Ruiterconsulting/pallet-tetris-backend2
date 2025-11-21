@@ -1,21 +1,28 @@
-FROM continuumio/miniconda3:latest
+FROM python:3.10-slim
 
-# Create environment
-RUN conda create -y -n occ_env python=3.10
+# System dependencies required for OpenCascade
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libgl1 \
+    libxext6 \
+    libsm6 \
+    libxrender1 \
+    libx11-6 \
+    libfontconfig1 \
+    libglu1-mesa \
+    && apt-get clean
 
-# Use environment for all RUN commands
-SHELL ["conda", "run", "-n", "occ_env", "/bin/bash", "-c"]
-
-# Install OpenCascade + pythonocc-core
-RUN conda install -y -c conda-forge occt=7.7.0 pythonocc-core=7.7.0
-
-# Install Python deps
-RUN pip install fastapi uvicorn python-multipart numpy
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
+    numpy \
+    OCP
 
 WORKDIR /app
 COPY . .
 
 EXPOSE 8000
 
-CMD ["conda", "run", "--no-capture-output", "-n", "occ_env", \
-     "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
