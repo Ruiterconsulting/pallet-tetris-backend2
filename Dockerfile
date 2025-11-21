@@ -1,21 +1,22 @@
-FROM continuumio/miniconda3:23.3.1-0
+FROM python:3.10-slim
 
-# Create a conda environment
-RUN conda create -y -n occ_env python=3.9
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
+    libxcb1 \
+    && apt-get clean
 
-# Use that env by default
-SHELL ["conda", "run", "-n", "occ_env", "/bin/bash", "-c"]
-
-# Install OpenCascade + pythonocc-core 7.6 (stable)
-RUN conda install -y -c conda-forge occt=7.6.0 pythonocc-core=7.6.3
-
-# Install FastAPI deps
-RUN pip install fastapi uvicorn python-multipart numpy
+# Install Python packages
+RUN pip install --no-cache-dir \
+    fastapi \
+    uvicorn \
+    python-multipart \
+    numpy \
+    pyocct
 
 WORKDIR /app
 COPY . .
 
 EXPOSE 8000
 
-CMD ["conda", "run", "--no-capture-output", "-n", "occ_env", \
-     "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
