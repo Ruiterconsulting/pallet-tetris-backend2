@@ -1,20 +1,14 @@
-FROM python:3.11-slim
+FROM debian:12
 
-# Install FreeCAD + dependencies
+# Install OCCT CLI tools + Python + pip
 RUN apt-get update && apt-get install -y \
-    freecad \
-    python3-pyside2.qtcore \
-    python3-pyside2.qtgui \
-    python3-pyside2.qtnetwork \
-    python3-pyside2.qtwidgets \
-    python3-pyside2.qtx11extras \
+    occt-tools \
+    python3 \
+    python3-pip \
     && apt-get clean
 
-RUN pip install --no-cache-dir \
-    fastapi \
-    uvicorn \
-    python-multipart \
-    numpy
+# Python deps
+RUN pip install fastapi uvicorn python-multipart numpy
 
 WORKDIR /app
 COPY . .
