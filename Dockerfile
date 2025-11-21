@@ -11,7 +11,7 @@ RUN conda install -n occ -c conda-forge occt=7.7.0 -y
 # Install pythonocc-core
 RUN conda install -n occ -c conda-forge pythonocc-core=7.7.0 -y
 
-# Install FastAPI + Uvicorn + other deps
+# Install FastAPI + dependencies
 RUN conda install -n occ -c conda-forge fastapi uvicorn python-multipart numpy -y
 
 WORKDIR /app
