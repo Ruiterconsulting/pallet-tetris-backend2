@@ -1,14 +1,18 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 import cadquery as cq
 import tempfile
 import os
 import traceback
-import math
 
-app = FastAPI(title="Pallet Tetris Analyzer", version="1.0.0")
+
+# ============================================================
+# FastAPI setup
+# ============================================================
+
+app = FastAPI(title="Pallet Tetris Analyzer", version="2.0.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -19,38 +23,71 @@ app.add_middleware(
 )
 
 
+# ============================================================
+# Helpers
+# ============================================================
+
 def ensure_step(filename: str):
     ext = (os.path.splitext(filename)[1] or "").lower()
     if ext not in [".step", ".stp"]:
         raise HTTPException(status_code=415, detail="Upload .STEP or .STP only")
 
 
+# ============================================================
+# Root endpoint
+# ============================================================
+
 @app.get("/")
 def root():
-    return {"message": "Pallet Tetris analyzer live ✅"}
+    return {"message": "Pallet Tetris Analyzer live ✅"}
 
+
+# ============================================================
+# Download endpoint (for STL)
+# ============================================================
+
+@app.get("/download/{file_name}")
+def download_file(file_name: str):
+    full_path = f"/tmp/{file_name}"
+
+    if not os.path.exists(full_path):
+        raise HTTPException(status_code=404, detail="File not found")
+
+    return FileResponse(full_path, media_type="application/octet-stream", filename=file_name)
+
+
+# ============================================================
+# Analyze STEP
+# ============================================================
 
 @app.post("/analyze")
 async def analyze_step(file: UploadFile = File(...)):
-    tmp_step = tmp_stl = None
+    tmp_step = None
     filename = file.filename
 
     try:
         ensure_step(filename)
 
-        # 1) STEP naar /tmp
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".step") as t:
+        # --------------------------------------------------------
+        # Save STEP into /tmp
+        # --------------------------------------------------------
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".step", dir="/tmp") as t:
             t.write(await file.read())
             tmp_step = t.name
 
-        # 2) STEP inlezen via cadquery
+        # --------------------------------------------------------
+        # Load STEP using CadQuery
+        # --------------------------------------------------------
         model = cq.importers.importStep(tmp_step)
         shape = model.val()
         if shape is None or shape.isNull():
             raise RuntimeError("Imported STEP shape is null")
 
-        # 3) Bounding box
+        # --------------------------------------------------------
+        # Bounding box
+        # --------------------------------------------------------
         bbox = shape.BoundingBox()
+
         raw_box = {
             "xmin": float(bbox.xmin),
             "xmax": float(bbox.xmax),
@@ -60,57 +97,66 @@ async def analyze_step(file: UploadFile = File(...)):
             "zmax": float(bbox.zmax),
         }
 
-        # Afmetingen (mm)
-        x_len = float(bbox.xlen)
-        y_len = float(bbox.ylen)
-        z_len = float(bbox.zlen)
+        # Dimensions sorted
+        dims_sorted = sorted(
+            [float(bbox.xlen), float(bbox.ylen), float(bbox.zlen)],
+            reverse=True
+        )
 
-        # Sorteer: grootste = length, middelste = width, kleinste = height
-        dims_sorted = sorted([x_len, y_len, z_len], reverse=True)
         dimensions_mm = {
             "length": round(dims_sorted[0], 3),
             "width": round(dims_sorted[1], 3),
             "height": round(dims_sorted[2], 3),
         }
 
-        # 4) Volume + gewicht
+        # --------------------------------------------------------
+        # Volume & Weight
+        # --------------------------------------------------------
         try:
             volume_mm3 = float(shape.Volume())
         except Exception:
             volume_mm3 = None
 
-        if volume_mm3 is not None:
-            volume_m3 = volume_mm3 / 1_000_000_000.0  # mm³ → m³
-            # simpele aanname: staal ~7850 kg/m³
-            density_steel = 7850.0
-            weight_kg = volume_m3 * density_steel
-            weight_kg = round(weight_kg, 4)
+        if volume_mm3:
+            volume_m3 = volume_mm3 / 1_000_000_000
+            weight_kg = round(volume_m3 * 7850, 4)
         else:
             volume_m3 = None
             weight_kg = None
 
-        # 5) (optioneel) STL export – alleen als je deze later nodig hebt
-        tmp_stl = tmp_step.replace(".step", ".stl")
+        # --------------------------------------------------------
+        # Export STL to /tmp
+        # --------------------------------------------------------
+        stl_name = os.path.basename(tmp_step).replace(".step", ".stl")
+        tmp_stl_path = f"/tmp/{stl_name}"
+
         try:
-            cq.exporters.export(shape, tmp_stl, "STL")
+            cq.exporters.export(shape, tmp_stl_path, "STL")
         except Exception as e:
             print("⚠️ STL export failed:", e)
-            tmp_stl = None
+            tmp_stl_path = None
 
-        # Voor nu geen Supabase in deze versie – alleen metadata terug
-        payload = {
-            "fileName": filename,
-            "material": "steel",  # voorlopig vast; later via form/input
-            "tempPath": tmp_step,  # alleen intern nuttig, maar laat hem staan als je hem al gebruikt
-            "stlPath": tmp_stl,
-            "rawBoundingBox": raw_box,
-            "dimensions_mm": dimensions_mm,
-            "volume_mm3": round(volume_mm3, 3) if volume_mm3 is not None else None,
-            "volume_m3": round(volume_m3, 9) if volume_m3 is not None else None,
-            "weight_kg": weight_kg,
-        }
+        stl_url = (
+            f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/download/{stl_name}"
+            if tmp_stl_path
+            else None
+        )
 
-        return JSONResponse(content=payload)
+        # --------------------------------------------------------
+        # JSON Response
+        # --------------------------------------------------------
+        return JSONResponse(
+            content={
+                "fileName": filename,
+                "material": "steel",
+                "dimensions_mm": dimensions_mm,
+                "rawBoundingBox": raw_box,
+                "volume_mm3": round(volume_mm3, 3) if volume_mm3 else None,
+                "volume_m3": round(volume_m3, 9) if volume_m3 else None,
+                "weight_kg": weight_kg,
+                "stlURL": stl_url,
+            }
+        )
 
     except Exception as e:
         tb = traceback.format_exc(limit=12)
@@ -123,8 +169,9 @@ async def analyze_step(file: UploadFile = File(...)):
                 "fileName": filename,
             },
         )
+
     finally:
-        # alleen de STEP opruimen; STL kun je evt. laten staan zolang je hem niet gebruikt
+        # Clean STEP (STL blijft beschikbaar voor download)
         try:
             if tmp_step and os.path.exists(tmp_step):
                 os.remove(tmp_step)
