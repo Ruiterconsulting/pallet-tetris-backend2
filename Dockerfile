@@ -1,18 +1,30 @@
-FROM debian:12
+# Dockerfile
 
-# Install OCCT CLI tools + Python + pip
-RUN apt-get update && apt-get install -y \
-    occt-tools \
-    python3 \
-    python3-pip \
-    && apt-get clean
+FROM python:3.11-bullseye
 
-# Python deps
-RUN pip install fastapi uvicorn python-multipart numpy
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --fix-missing \
+    build-essential \
+    libgl1-mesa-glx \
+    libglu1-mesa \
+    libxrender1 \
+    libxext6 \
+    libsm6 \
+    libglib2.0-0 \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY . .
 
-EXPOSE 8000
+COPY requirements.txt .
 
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+RUN pip install --upgrade pip
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY main.py .
+
+EXPOSE 8080
+
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
